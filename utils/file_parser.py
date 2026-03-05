@@ -1,0 +1,218 @@
+from __future__ import annotations
+
+import re
+from datetime import timedelta
+from typing import Tuple
+
+import pandas as pd
+
+from .helpers import AppError, ensure_columns
+
+TICKET_REQUIRED_COLUMNS = [
+    "创建时间",
+    "关联提出人",
+    "工单分类",
+    "工单标签",
+    "计数",
+    "预计工时",
+    "客服结论",
+    "客服补充",
+]
+
+QA_REQUIRED_COLUMNS = [
+    "客服",
+    "等级",
+    "所属周次",
+    "质检会话占比",
+]
+
+
+def _read_excel(uploaded_file) -> pd.DataFrame:
+    try:
+        return pd.read_excel(uploaded_file, engine="openpyxl")
+    except Exception as exc:  # noqa: BLE001
+        raise AppError(f"Failed to parse Excel file: {exc}") from exc
+
+
+def _match_week_range_col(col_name: str) -> bool:
+    text = str(col_name).strip()
+    pattern = r"^\d{4}[/-]\d{1,2}[/-]\d{1,2}\s*[-~至]\s*\d{4}[/-]\d{1,2}[/-]\d{1,2}$"
+    return re.match(pattern, text) is not None
+
+
+def _week_col_sort_key(col_name: str):
+    text = str(col_name).strip()
+    parts = re.split(r"[-~至]", text)
+    if not parts:
+        return pd.Timestamp.max
+    start = pd.to_datetime(parts[0].strip(), errors="coerce")
+    if pd.isna(start):
+        return pd.Timestamp.max
+    return start
+
+
+def _extract_week_range(raw_col_name: str):
+    text = str(raw_col_name).strip()
+    # Remove pandas duplicate suffix like ".1", ".2".
+    text = re.sub(r"\.\d+$", "", text)
+    parts = re.split(r"[-~至]", text)
+    if len(parts) != 2:
+        return None
+    start = pd.to_datetime(parts[0].strip(), errors="coerce")
+    end = pd.to_datetime(parts[1].strip(), errors="coerce")
+    if pd.isna(start) or pd.isna(end):
+        return None
+    return start.normalize(), end.normalize()
+
+
+def _normalize_qa_wide_to_long(qa_df: pd.DataFrame) -> tuple[pd.DataFrame, list[tuple[int, str, pd.Timestamp, pd.Timestamp]]]:
+    name_col = None
+    for candidate in ["客服（人名）", "客服(人名)", "客服"]:
+        if candidate in qa_df.columns:
+            name_col = candidate
+            break
+
+    if name_col is None or "质检会话占比" not in qa_df.columns:
+        raise AppError(
+            "QA result format not supported. Need either long format "
+            "(客服, 等级, 所属周次, 质检会话占比) or wide format "
+            "(客服（人名） + week range columns + 质检会话占比)."
+        )
+
+    all_cols = list(qa_df.columns)
+
+    # Accept repeated pair pattern:
+    # [week_grade_col, ratio_col, week_grade_col.1, ratio_col.1, ...]
+    # and also older format with one shared ratio column.
+    grade_ratio_pairs = []
+    shared_ratio_col = "质检会话占比" if "质检会话占比" in qa_df.columns else None
+    ratio_like = [c for c in all_cols if str(c).startswith("质检会话占比")]
+
+    for i, col in enumerate(all_cols):
+        col_text = str(col).strip()
+        if col == name_col:
+            continue
+        if col_text.startswith("质检会话占比"):
+            continue
+
+        # Treat this as one week grade column.
+        ratio_col = None
+        if i + 1 < len(all_cols) and str(all_cols[i + 1]).startswith("质检会话占比"):
+            ratio_col = all_cols[i + 1]
+        elif shared_ratio_col is not None:
+            ratio_col = shared_ratio_col
+        elif ratio_like:
+            ratio_col = ratio_like[0]
+
+        grade_ratio_pairs.append((col, ratio_col))
+
+    # De-duplicate while preserving order.
+    uniq_pairs = []
+    seen = set()
+    for g_col, r_col in grade_ratio_pairs:
+        if g_col in seen:
+            continue
+        seen.add(g_col)
+        uniq_pairs.append((g_col, r_col))
+    grade_ratio_pairs = uniq_pairs
+
+    if not grade_ratio_pairs:
+        raise AppError("No week grade columns found in QA wide format.")
+
+    week_meta = []
+    for idx, (grade_col, _) in enumerate(grade_ratio_pairs, start=1):
+        parsed = _extract_week_range(str(grade_col))
+        if parsed is None:
+            raise AppError(
+                f"Invalid QA week column format: '{grade_col}'. "
+                "Expected date range like '2026/02/23-2026/03/01'."
+            )
+        week_meta.append((idx, str(grade_col), parsed[0], parsed[1]))
+
+    rows = []
+    for _, row in qa_df.iterrows():
+        agent_name = str(row.get(name_col, "")).strip()
+        if not agent_name or agent_name.lower() == "nan":
+            continue
+
+        for idx, (grade_col, ratio_col) in enumerate(grade_ratio_pairs, start=1):
+            grade = row.get(grade_col)
+            if pd.isna(grade) or str(grade).strip() == "":
+                continue
+            ratio = row.get(ratio_col) if ratio_col is not None else 0.0
+            rows.append(
+                {
+                    "客服": agent_name,
+                    "等级": str(grade).strip(),
+                    "所属周次": f"W{idx}",
+                    "质检会话占比": ratio,
+                }
+            )
+
+    long_df = pd.DataFrame(rows)
+    if long_df.empty:
+        raise AppError("QA file has no usable rows after format normalization.")
+    return long_df, week_meta
+
+
+def _normalize_qa_df(qa_df: pd.DataFrame) -> tuple[pd.DataFrame, list[tuple[int, str, pd.Timestamp, pd.Timestamp]]]:
+    # Long format: keep as-is.
+    if all(col in qa_df.columns for col in QA_REQUIRED_COLUMNS):
+        return qa_df.copy(), []
+    # Wide format: convert to long.
+    return _normalize_qa_wide_to_long(qa_df)
+
+
+def _validate_qa_week_ranges(ticket_df: pd.DataFrame, week_meta: list[tuple[int, str, pd.Timestamp, pd.Timestamp]]) -> None:
+    if not week_meta:
+        return
+
+    created = pd.to_datetime(ticket_df["创建时间"], errors="coerce")
+    if created.isna().any():
+        raise AppError("Field '创建时间' contains invalid values, cannot validate QA week ranges.")
+    base = created.min().normalize()
+
+    errors = []
+    for week_idx, col_name, qa_start, qa_end in week_meta:
+        expected_start = base + timedelta(days=(week_idx - 1) * 7)
+        expected_end = expected_start + timedelta(days=6)
+        if qa_start > qa_end:
+            errors.append(
+                f"{col_name}: start date {qa_start.date()} is later than end date {qa_end.date()}"
+            )
+            continue
+        if qa_start != expected_start or qa_end != expected_end:
+            errors.append(
+                f"{col_name}: expected {expected_start.date()}-{expected_end.date()}, "
+                f"got {qa_start.date()}-{qa_end.date()}"
+            )
+
+    if errors:
+        preview = "; ".join(errors[:5])
+        if len(errors) > 5:
+            preview += f" ... (+{len(errors) - 5} more)"
+        raise AppError(
+            "QA week date ranges do not match ticket-derived weeks. " + preview
+        )
+
+
+def parse_inputs(ticket_file, qa_file) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    if ticket_file is None:
+        raise AppError("Ticket detail Excel is required.")
+    if qa_file is None:
+        raise AppError("QA result Excel is required.")
+
+    ticket_df = _read_excel(ticket_file)
+    qa_raw_df = _read_excel(qa_file)
+    qa_df, week_meta = _normalize_qa_df(qa_raw_df)
+
+    ensure_columns(ticket_df, TICKET_REQUIRED_COLUMNS, "ticket detail")
+    ensure_columns(qa_df, QA_REQUIRED_COLUMNS, "QA result")
+    _validate_qa_week_ranges(ticket_df, week_meta)
+
+    if ticket_df.empty:
+        raise AppError("Ticket detail file has no data rows.")
+    if qa_df.empty:
+        raise AppError("QA result file has no data rows.")
+
+    return ticket_df.copy(), qa_df.copy()
