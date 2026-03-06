@@ -39,6 +39,19 @@ else:
     st.info("未找到 QA 模板文件：templates/qa_template.xlsx")
 
 qa_file = st.file_uploader("上传 QA 结果 Excel", type=["xlsx"])
+export_template_path = (
+    Path(__file__).resolve().parent / "templates" / "export_template.xlsx"
+)
+if export_template_path.exists():
+    st.download_button(
+        label="下载导出模板",
+        data=export_template_path.read_bytes(),
+        file_name="导出模板.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+else:
+    st.info("未找到导出模板文件：templates/export_template.xlsx")
+
 template_file = st.file_uploader(
     "上传导出模板 Excel（可选）",
     type=["xlsx"],
