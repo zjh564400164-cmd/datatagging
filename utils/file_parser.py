@@ -26,6 +26,12 @@ QA_REQUIRED_COLUMNS = [
     "质检会话占比",
 ]
 
+QA_VERSION_COLUMNS = [
+    "版本",
+    "版本（老版/新版）",
+    "版本(老版/新版)",
+]
+
 
 def _remove_qa_example_rows(qa_df: pd.DataFrame) -> pd.DataFrame:
     if qa_df.empty:
@@ -87,11 +93,17 @@ def _normalize_qa_wide_to_long(qa_df: pd.DataFrame) -> tuple[pd.DataFrame, list[
             name_col = candidate
             break
 
+    version_col = None
+    for candidate in QA_VERSION_COLUMNS:
+        if candidate in qa_df.columns:
+            version_col = candidate
+            break
+
     if name_col is None or "质检会话占比" not in qa_df.columns:
         raise AppError(
             "QA 结果格式不支持。请使用以下任一格式："
             "长表（客服, 等级, 所属周次, 质检会话占比）"
-            "或宽表（客服（人名）+ 每周区间列 + 质检会话占比）。"
+            "或宽表（客服（人名）+ 版本（老版/新版）+ 每周区间列 + 质检会话占比）。"
         )
 
     all_cols = list(qa_df.columns)
@@ -107,7 +119,11 @@ def _normalize_qa_wide_to_long(qa_df: pd.DataFrame) -> tuple[pd.DataFrame, list[
         col_text = str(col).strip()
         if col == name_col:
             continue
+        if version_col is not None and col == version_col:
+            continue
         if col_text.startswith("质检会话占比"):
+            continue
+        if not _match_week_range_col(col_text):
             continue
 
         # Treat this as one week grade column.
@@ -149,20 +165,22 @@ def _normalize_qa_wide_to_long(qa_df: pd.DataFrame) -> tuple[pd.DataFrame, list[
         agent_name = str(row.get(name_col, "")).strip()
         if not agent_name or agent_name.lower() == "nan":
             continue
+        qa_version = str(row.get(version_col, "")).strip() if version_col else ""
 
         for idx, (grade_col, ratio_col) in enumerate(grade_ratio_pairs, start=1):
             grade = row.get(grade_col)
             if pd.isna(grade) or str(grade).strip() == "":
                 continue
             ratio = row.get(ratio_col) if ratio_col is not None else 0.0
-            rows.append(
-                {
-                    "客服": agent_name,
-                    "等级": str(grade).strip(),
-                    "所属周次": f"W{idx}",
-                    "质检会话占比": ratio,
-                }
-            )
+            row_item = {
+                "客服": agent_name,
+                "等级": str(grade).strip(),
+                "所属周次": f"W{idx}",
+                "质检会话占比": ratio,
+            }
+            if qa_version:
+                row_item["版本"] = qa_version
+            rows.append(row_item)
 
     long_df = pd.DataFrame(rows)
     if long_df.empty:
