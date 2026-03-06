@@ -16,6 +16,19 @@ from utils.time_calculator import build_week_date_labels, preprocess_and_calcula
 st.set_page_config(page_title="客服绩效自动计算", layout="wide")
 st.title("客服绩效自动计算")
 st.caption("上传工单明细与 QA 质检文件，自动生成月度绩效结算。")
+st.markdown(
+    """
+<style>
+div[data-testid="stDownloadButton"] button {
+    padding: 0.18rem 0.55rem;
+    font-size: 0.8rem;
+    min-height: 1.8rem;
+    line-height: 1.1;
+}
+</style>
+""",
+    unsafe_allow_html=True,
+)
 
 with st.expander("输入格式说明", expanded=False):
     st.markdown(
@@ -28,40 +41,51 @@ with st.expander("输入格式说明", expanded=False):
 """
     )
 
-ticket_file = st.file_uploader("上传工单明细 Excel", type=["xlsx"])
+st.markdown("##### 上传工单明细 Excel")
+ticket_file = st.file_uploader("上传工单明细 Excel", type=["xlsx"], label_visibility="collapsed")
 qa_template_path = Path(__file__).resolve().parent / "templates" / "qa_template.xlsx"
-if qa_template_path.exists():
-    st.download_button(
-        label="下载 QA 模板",
-        data=qa_template_path.read_bytes(),
-        file_name="QA质检模板.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-else:
-    st.info("未找到 QA 模板文件：templates/qa_template.xlsx")
-
-qa_file = st.file_uploader("上传 QA 结果 Excel", type=["xlsx"])
+qa_label_col, qa_btn_col = st.columns([5, 1])
+with qa_label_col:
+    st.markdown("##### 上传 QA 结果 Excel")
+with qa_btn_col:
+    if qa_template_path.exists():
+        st.download_button(
+            label="下载QA模板",
+            data=qa_template_path.read_bytes(),
+            file_name="QA质检模板.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+    else:
+        st.caption("未找到QA模板")
+qa_file = st.file_uploader("上传 QA 结果 Excel", type=["xlsx"], label_visibility="collapsed")
+st.markdown("##### 上传 Udesk 工单 Excel（可选，用于补齐飞书缺失字段）")
 udesk_file = st.file_uploader(
-    "上传 Udesk 工单 Excel（可选，用于补齐飞书工单缺失字段）",
+    "上传 Udesk 工单 Excel（可选，用于补齐飞书缺失字段）",
     type=["xlsx"],
+    label_visibility="collapsed",
 )
 export_template_path = (
     Path(__file__).resolve().parent / "templates" / "export_template.xlsx"
 )
-if export_template_path.exists():
-    st.download_button(
-        label="下载导出模板",
-        data=export_template_path.read_bytes(),
-        file_name="导出模板.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-else:
-    st.info("未找到导出模板文件：templates/export_template.xlsx")
+export_label_col, export_btn_col = st.columns([5, 1])
+with export_label_col:
+    st.markdown("##### 上传导出模板 Excel（可选）")
+with export_btn_col:
+    if export_template_path.exists():
+        st.download_button(
+            label="下载导出模板",
+            data=export_template_path.read_bytes(),
+            file_name="导出模板.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+    else:
+        st.caption("未找到导出模板")
 
 template_file = st.file_uploader(
     "上传导出模板 Excel（可选）",
     type=["xlsx"],
     help="上传后将按模板样式导出结果。",
+    label_visibility="collapsed",
 )
 estimated_unit_label = st.selectbox(
     "工单文件中的预计工时单位",
