@@ -231,8 +231,11 @@ def _export_with_template(
         month_reward = 0.0
         if month_item is not None:
             version = str(month_item.get("版本", "")).strip()
+            month_hours = float(month_item.get("累计修正工时", 0.0))
             month_rate = float(month_item.get("月度达成率", 0.0))
             month_reward = float(month_item.get("累计激励奖金", 0.0))
+        else:
+            month_hours = 0.0
 
         for week in week_names:
             row = week_agent_map[week].get(agent)
@@ -267,6 +270,13 @@ def _export_with_template(
             _copy_cell_style(proto["rate_d"], ws.cell(i, week_rate_cols[week]))
 
         if version == "老版":
+            # 老版不做周维度统计：在周区块合并显示月累计工时。
+            if week_names:
+                merge_start = week_block_start_cols[week_names[0]]
+                merge_end = week_block_start_cols[week_names[-1]] + 2
+                ws.merge_cells(start_row=i, start_column=merge_start, end_row=i, end_column=merge_end)
+                ws.cell(i, merge_start).value = month_hours
+                _copy_cell_style(proto["week_d1"], ws.cell(i, merge_start))
             ws.cell(i, avg_col).value = month_rate
             ws.cell(i, total_reward_col).value = month_reward
         elif week_names:
