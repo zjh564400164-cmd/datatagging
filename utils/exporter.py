@@ -86,6 +86,9 @@ def _export_with_template(
     wb = load_workbook(BytesIO(template_bytes))
     week_names = _sorted_week_names(weekly_sheets)
     agents = sorted(monthly_df["客服姓名"].astype(str).unique().tolist())
+    monthly_map = {
+        str(row["客服姓名"]): row for _, row in monthly_df.iterrows()
+    }
 
     # Ensure weekly sheets exist.
     base_week_sheet = None
@@ -204,9 +207,13 @@ def _export_with_template(
 
     avg_col = rate_start_col + len(week_names)
     total_reward_col = avg_col + 1
-    ws.cell(3, avg_col).value = "平均绩效系数"
+    if week_names:
+        ws.cell(3, avg_col).value = "平均绩效系数"
+        _copy_cell_style(proto["avg_h"], ws.cell(3, avg_col))
+    else:
+        ws.cell(3, avg_col).value = "月度达成率"
+        _copy_cell_style(proto["rate_h"], ws.cell(3, avg_col))
     ws.cell(3, total_reward_col).value = "超激励绩效"
-    _copy_cell_style(proto["avg_h"], ws.cell(3, avg_col))
     _copy_cell_style(proto["total_h"], ws.cell(3, total_reward_col))
 
     week_agent_map = {}
@@ -218,6 +225,14 @@ def _export_with_template(
     for i, agent in enumerate(agents, start=4):
         ws[f"A{i}"] = agent
         _copy_cell_style(proto["name_row"], ws[f"A{i}"])
+        month_item = monthly_map.get(agent)
+        version = ""
+        month_rate = 0.0
+        month_reward = 0.0
+        if month_item is not None:
+            version = str(month_item.get("版本", "")).strip()
+            month_rate = float(month_item.get("月度达成率", 0.0))
+            month_reward = float(month_item.get("累计激励奖金", 0.0))
 
         for week in week_names:
             row = week_agent_map[week].get(agent)
@@ -227,27 +242,43 @@ def _export_with_template(
             reward = 0.0 if row is None else float(row["周奖励"])
 
             base_idx = week_block_start_cols[week]
-            # Summary "工时" uses QA-corrected hours.
-            ws.cell(i, base_idx).value = corrected
-            ws.cell(i, base_idx + 1).value = 5
-            ws.cell(i, base_idx + 2).value = reward
+            # 老版按月计算：周维度展示留空，避免误解。
+            if version == "老版":
+                ws.cell(i, base_idx).value = ""
+                ws.cell(i, base_idx + 1).value = ""
+                ws.cell(i, base_idx + 2).value = ""
+            else:
+                # Summary "工时" uses QA-corrected hours.
+                ws.cell(i, base_idx).value = corrected
+                ws.cell(i, base_idx + 1).value = 5
+                ws.cell(i, base_idx + 2).value = reward
             _copy_cell_style(proto["week_d1"], ws.cell(i, base_idx))
             _copy_cell_style(proto["week_d2"], ws.cell(i, base_idx + 1))
             _copy_cell_style(proto["week_d3"], ws.cell(i, base_idx + 2))
 
-            y_col = get_column_letter(base_idx)
-            attend_col = get_column_letter(base_idx + 1)
-            ws.cell(i, week_rate_cols[week]).value = (
-                f"=IF({attend_col}{i}*480=0,0,{y_col}{i}/({attend_col}{i}*480))"
-            )
+            if version == "老版":
+                ws.cell(i, week_rate_cols[week]).value = ""
+            else:
+                y_col = get_column_letter(base_idx)
+                attend_col = get_column_letter(base_idx + 1)
+                ws.cell(i, week_rate_cols[week]).value = (
+                    f"=IF({attend_col}{i}*480=0,0,{y_col}{i}/({attend_col}{i}*480))"
+                )
             _copy_cell_style(proto["rate_d"], ws.cell(i, week_rate_cols[week]))
 
-        rate_cols = [get_column_letter(week_rate_cols[w]) for w in week_names]
-        reward_cols = [get_column_letter(week_block_start_cols[w] + 2) for w in week_names]
-        ws.cell(i, avg_col).value = (
-            f"=IFERROR(AVERAGE({','.join([f'{c}{i}' for c in rate_cols])}),0)"
-        )
-        ws.cell(i, total_reward_col).value = f"=SUM({','.join([f'{c}{i}' for c in reward_cols])})"
+        if version == "老版":
+            ws.cell(i, avg_col).value = month_rate
+            ws.cell(i, total_reward_col).value = month_reward
+        elif week_names:
+            rate_cols = [get_column_letter(week_rate_cols[w]) for w in week_names]
+            reward_cols = [get_column_letter(week_block_start_cols[w] + 2) for w in week_names]
+            ws.cell(i, avg_col).value = (
+                f"=IFERROR(AVERAGE({','.join([f'{c}{i}' for c in rate_cols])}),0)"
+            )
+            ws.cell(i, total_reward_col).value = f"=SUM({','.join([f'{c}{i}' for c in reward_cols])})"
+        else:
+            ws.cell(i, avg_col).value = month_rate
+            ws.cell(i, total_reward_col).value = month_reward
         _copy_cell_style(proto["avg_d"], ws.cell(i, avg_col))
         _copy_cell_style(proto["total_d"], ws.cell(i, total_reward_col))
 

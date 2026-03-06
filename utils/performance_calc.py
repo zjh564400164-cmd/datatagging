@@ -200,6 +200,7 @@ def calculate_performance(
         old_monthly_rows.append(
             {
                 "客服姓名": agent_name,
+                "版本": "老版",
                 "累计修正工时": y_month,
                 "累计激励奖金": reward,
                 "月度达成率": rate,
@@ -267,7 +268,7 @@ def calculate_performance(
     )
 
     if weekly_df.empty:
-        monthly_new_df = pd.DataFrame(columns=["客服姓名", "累计修正工时", "累计激励奖金", "月度达成率"])
+        monthly_new_df = pd.DataFrame(columns=["客服姓名", "版本", "累计修正工时", "累计激励奖金", "月度达成率"])
     else:
         month_perf = (
             weekly_df.assign(corrected=lambda d: d["质检系数 X"] * d["周实际工时 Y"])
@@ -282,13 +283,14 @@ def calculate_performance(
             lambda r: (r["累计修正工时"] / r["n_sum"]) if r["n_sum"] > 0 else 0.0, axis=1
         )
         monthly_new_df = month_perf.drop(columns=["n_sum"])
+        monthly_new_df["版本"] = "新版"
 
     monthly_old_df = pd.DataFrame(old_monthly_rows)
     monthly_df = pd.concat([monthly_new_df, monthly_old_df], ignore_index=True)
     monthly_df = monthly_df.merge(total_tickets_df, on="客服姓名", how="left")
 
     monthly_df = monthly_df[
-        ["客服姓名", "总工单量", "累计修正工时", "累计激励奖金", "月度达成率"]
+        ["客服姓名", "版本", "总工单量", "累计修正工时", "累计激励奖金", "月度达成率"]
     ].sort_values("客服姓名")
 
     weekly_sheets = {}
