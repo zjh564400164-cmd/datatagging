@@ -7,6 +7,8 @@ import pandas as pd
 from .helpers import AppError, is_empty, normalize_text, parse_datetime, safe_to_float
 
 DEFAULT_ESTIMATED_MINUTES = 10.0
+PROMOTION_KEYWORDS = ["每日推广数据上传", "每日推广数据上创", "每日推广数据"]
+TRAFFIC_KEYWORDS = ["每日流量上传", "每日流量"]
 
 
 def parse_estimated_minutes(value, estimated_unit: str = "minutes") -> float:
@@ -20,6 +22,66 @@ def parse_estimated_minutes(value, estimated_unit: str = "minutes") -> float:
     if estimated_unit == "hours":
         return raw * 60.0
     return raw
+
+
+def _detect_internal_upload_type(question_name: str) -> str:
+    text = normalize_text(question_name)
+    if not text:
+        return ""
+    if any(k in text for k in PROMOTION_KEYWORDS):
+        return "promotion"
+    if any(k in text for k in TRAFFIC_KEYWORDS):
+        return "traffic"
+    return ""
+
+
+def _internal_upload_minutes(upload_type: str, monthly_count: float) -> float:
+    if upload_type == "promotion":
+        if monthly_count <= 100:
+            return 10.0
+        if monthly_count <= 300:
+            return 7.0
+        return 5.0
+    if upload_type == "traffic":
+        if monthly_count <= 1000:
+            return 1.4
+        if monthly_count <= 2000:
+            return 1.0
+        return 0.8
+    return 0.0
+
+
+def _apply_internal_upload_estimate_rules(df: pd.DataFrame) -> pd.DataFrame:
+    if "问题名称" not in df.columns:
+        return df
+
+    out = df.copy()
+    out["internal_upload_type"] = out["问题名称"].apply(_detect_internal_upload_type)
+    matched = out["internal_upload_type"] != ""
+    if not matched.any():
+        return out
+
+    out["month_key"] = out["创建时间"].dt.to_period("M").astype(str)
+
+    grouped = (
+        out.loc[matched]
+        .groupby(["关联提出人", "month_key", "internal_upload_type"], as_index=False)
+        .agg(monthly_count=("count_fixed", "sum"))
+    )
+    grouped["override_minutes"] = grouped.apply(
+        lambda r: _internal_upload_minutes(
+            str(r["internal_upload_type"]), safe_to_float(r["monthly_count"], 0.0)
+        ),
+        axis=1,
+    )
+    merge_cols = ["关联提出人", "month_key", "internal_upload_type"]
+    out = out.merge(grouped[merge_cols + ["override_minutes"]], on=merge_cols, how="left")
+
+    override_mask = matched & out["override_minutes"].notna() & (out["override_minutes"] > 0)
+    out.loc[override_mask, "estimated_minutes"] = out.loc[override_mask, "override_minutes"]
+
+    out = out.drop(columns=["month_key", "override_minutes"])
+    return out
 
 
 def preprocess_and_calculate(ticket_df: pd.DataFrame, estimated_unit: str = "minutes") -> pd.DataFrame:
@@ -43,6 +105,7 @@ def preprocess_and_calculate(ticket_df: pd.DataFrame, estimated_unit: str = "min
     df["estimated_minutes"] = df["预计工时"].apply(
         lambda x: parse_estimated_minutes(x, estimated_unit=estimated_unit)
     )
+    df = _apply_internal_upload_estimate_rules(df)
 
     # Week assignment by first ticket date.
     base_time: datetime = parse_datetime(df.loc[0, "创建时间"], "创建时间")
