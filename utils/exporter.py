@@ -70,7 +70,7 @@ def _export_with_template(
             base_week_sheet = wb[name]
             break
     if base_week_sheet is None:
-        raise ValueError("Template must contain at least one weekly sheet like 'W1'.")
+        raise ValueError("模板中至少需要一个周次工作表（如 'W1'）。")
 
     for week in week_names:
         if week not in wb.sheetnames:

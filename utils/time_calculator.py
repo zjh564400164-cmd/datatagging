@@ -29,10 +29,10 @@ def preprocess_and_calculate(ticket_df: pd.DataFrame, estimated_unit: str = "min
     try:
         df["创建时间"] = pd.to_datetime(df["创建时间"], errors="coerce")
     except Exception as exc:  # noqa: BLE001
-        raise AppError(f"Failed to parse '创建时间': {exc}") from exc
+        raise AppError(f"解析「创建时间」失败：{exc}") from exc
 
     if df["创建时间"].isna().any():
-        raise AppError("Field '创建时间' contains invalid values.")
+        raise AppError("字段「创建时间」包含无效值。")
 
     df = df.sort_values("创建时间").reset_index(drop=True)
 

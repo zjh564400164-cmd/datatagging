@@ -39,7 +39,7 @@ def calc_x_factor(grade: str, ratio_percent: float) -> float:
         return 0.85
     if grade == "C":
         return 0.6
-    raise AppError(f"Invalid QA grade: {grade}")
+    raise AppError(f"无效的 QA 等级：{grade}")
 
 
 def calc_week_reward(grade: str, m_over: float) -> float:
@@ -69,7 +69,7 @@ def calc_week_reward(grade: str, m_over: float) -> float:
     if grade == "A":
         return min(base_reward, 400.0)
 
-    raise AppError(f"Invalid QA grade: {grade}")
+    raise AppError(f"无效的 QA 等级：{grade}")
 
 
 def _prepare_qa_map(qa_df: pd.DataFrame) -> Dict[Tuple[str, str], dict]:
@@ -98,7 +98,7 @@ def calculate_performance(
     default_ratio_percent: float = 0.0,
 ):
     if ticket_df.empty:
-        raise AppError("No ticket data to calculate performance.")
+        raise AppError("没有可用于计算绩效的工单数据。")
 
     grouped = (
         ticket_df.groupby(["关联提出人", "week"], as_index=False)
@@ -121,10 +121,10 @@ def calculate_performance(
     if missing_pairs and not allow_missing_qa:
         preview = ", ".join([f"{a}-{w}" for a, w in missing_pairs[:10]])
         if len(missing_pairs) > 10:
-            preview += f" ... (+{len(missing_pairs) - 10} more)"
+            preview += f" ...（另有 {len(missing_pairs) - 10} 条）"
         raise AppError(
-            "Missing QA rows for agent-week pairs: "
-            f"{preview}. Please complete QA grades for all weeks."
+            "以下客服-周次缺少 QA 数据："
+            f"{preview}。请补齐所有周次的 QA 等级。"
         )
 
     qa_fallback_used: List[Tuple[str, str]] = []

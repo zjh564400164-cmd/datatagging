@@ -39,10 +39,10 @@ def safe_to_float(value: Any, default: float = 0.0) -> float:
 
 def parse_datetime(value: Any, field_name: str) -> datetime:
     if is_empty(value):
-        raise AppError(f"Field '{field_name}' has empty datetime values.")
+        raise AppError(f"字段「{field_name}」存在空日期时间值。")
     dt = pd.to_datetime(value, errors="coerce")
     if pd.isna(dt):
-        raise AppError(f"Field '{field_name}' contains invalid datetime values.")
+        raise AppError(f"字段「{field_name}」包含无效日期时间值。")
     return dt.to_pydatetime()
 
 
@@ -50,5 +50,5 @@ def ensure_columns(df: pd.DataFrame, required_cols: Iterable[str], sheet_name: s
     missing = [col for col in required_cols if col not in df.columns]
     if missing:
         raise AppError(
-            f"Missing required columns in {sheet_name}: {', '.join(missing)}"
+            f"{sheet_name}缺少必填列：{', '.join(missing)}"
         )

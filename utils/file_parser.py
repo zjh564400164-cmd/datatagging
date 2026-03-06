@@ -31,7 +31,7 @@ def _read_excel(uploaded_file) -> pd.DataFrame:
     try:
         return pd.read_excel(uploaded_file, engine="openpyxl")
     except Exception as exc:  # noqa: BLE001
-        raise AppError(f"Failed to parse Excel file: {exc}") from exc
+        raise AppError(f"Excel 解析失败：{exc}") from exc
 
 
 def _match_week_range_col(col_name: str) -> bool:
@@ -74,9 +74,9 @@ def _normalize_qa_wide_to_long(qa_df: pd.DataFrame) -> tuple[pd.DataFrame, list[
 
     if name_col is None or "质检会话占比" not in qa_df.columns:
         raise AppError(
-            "QA result format not supported. Need either long format "
-            "(客服, 等级, 所属周次, 质检会话占比) or wide format "
-            "(客服（人名） + week range columns + 质检会话占比)."
+            "QA 结果格式不支持。请使用以下任一格式："
+            "长表（客服, 等级, 所属周次, 质检会话占比）"
+            "或宽表（客服（人名）+ 每周区间列 + 质检会话占比）。"
         )
 
     all_cols = list(qa_df.columns)
@@ -117,15 +117,15 @@ def _normalize_qa_wide_to_long(qa_df: pd.DataFrame) -> tuple[pd.DataFrame, list[
     grade_ratio_pairs = uniq_pairs
 
     if not grade_ratio_pairs:
-        raise AppError("No week grade columns found in QA wide format.")
+        raise AppError("QA 宽表中未找到周次等级列。")
 
     week_meta = []
     for idx, (grade_col, _) in enumerate(grade_ratio_pairs, start=1):
         parsed = _extract_week_range(str(grade_col))
         if parsed is None:
             raise AppError(
-                f"Invalid QA week column format: '{grade_col}'. "
-                "Expected date range like '2026/02/23-2026/03/01'."
+                f"QA 周次列格式无效：'{grade_col}'。"
+                "应为日期区间，例如：'2026/02/23-2026/03/01'。"
             )
         week_meta.append((idx, str(grade_col), parsed[0], parsed[1]))
 
@@ -151,7 +151,7 @@ def _normalize_qa_wide_to_long(qa_df: pd.DataFrame) -> tuple[pd.DataFrame, list[
 
     long_df = pd.DataFrame(rows)
     if long_df.empty:
-        raise AppError("QA file has no usable rows after format normalization.")
+        raise AppError("QA 文件格式转换后没有可用数据行。")
     return long_df, week_meta
 
 
@@ -169,7 +169,7 @@ def _validate_qa_week_ranges(ticket_df: pd.DataFrame, week_meta: list[tuple[int,
 
     created = pd.to_datetime(ticket_df["创建时间"], errors="coerce")
     if created.isna().any():
-        raise AppError("Field '创建时间' contains invalid values, cannot validate QA week ranges.")
+        raise AppError("字段「创建时间」包含无效值，无法校验 QA 周次日期区间。")
     base = created.min().normalize()
 
     errors = []
@@ -178,29 +178,29 @@ def _validate_qa_week_ranges(ticket_df: pd.DataFrame, week_meta: list[tuple[int,
         expected_end = expected_start + timedelta(days=6)
         if qa_start > qa_end:
             errors.append(
-                f"{col_name}: start date {qa_start.date()} is later than end date {qa_end.date()}"
+                f"{col_name}：开始日期 {qa_start.date()} 晚于结束日期 {qa_end.date()}"
             )
             continue
         if qa_start != expected_start or qa_end != expected_end:
             errors.append(
-                f"{col_name}: expected {expected_start.date()}-{expected_end.date()}, "
-                f"got {qa_start.date()}-{qa_end.date()}"
+                f"{col_name}：应为 {expected_start.date()}-{expected_end.date()}，"
+                f"实际为 {qa_start.date()}-{qa_end.date()}"
             )
 
     if errors:
         preview = "; ".join(errors[:5])
         if len(errors) > 5:
-            preview += f" ... (+{len(errors) - 5} more)"
+            preview += f" ...（另有 {len(errors) - 5} 条）"
         raise AppError(
-            "QA week date ranges do not match ticket-derived weeks. " + preview
+            "QA 周次日期区间与工单推导周次不一致。 " + preview
         )
 
 
 def parse_inputs(ticket_file, qa_file) -> Tuple[pd.DataFrame, pd.DataFrame]:
     if ticket_file is None:
-        raise AppError("Ticket detail Excel is required.")
+        raise AppError("请上传工单明细 Excel。")
     if qa_file is None:
-        raise AppError("QA result Excel is required.")
+        raise AppError("请上传 QA 结果 Excel。")
 
     ticket_df = _read_excel(ticket_file)
     qa_raw_df = _read_excel(qa_file)
@@ -211,8 +211,8 @@ def parse_inputs(ticket_file, qa_file) -> Tuple[pd.DataFrame, pd.DataFrame]:
     _validate_qa_week_ranges(ticket_df, week_meta)
 
     if ticket_df.empty:
-        raise AppError("Ticket detail file has no data rows.")
+        raise AppError("工单明细文件没有数据行。")
     if qa_df.empty:
-        raise AppError("QA result file has no data rows.")
+        raise AppError("QA 结果文件没有数据行。")
 
     return ticket_df.copy(), qa_df.copy()
