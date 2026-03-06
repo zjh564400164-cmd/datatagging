@@ -23,6 +23,7 @@ with st.expander("输入格式说明", expanded=False):
 - 工单明细必需列：创建时间, 关联提出人, 工单分类, 工单标签, 计数, 预计工时, 客服结论, 客服补充
 - 工单明细可选列：问题名称（若包含“每日推广数据上传/每日流量上传”关键词，会触发月度阈值工时规则）
 - QA 结果必需列：客服, 等级, 所属周次, 质检会话占比（可选：版本）
+- 可选上传 Udesk 工单：将按“问题名称中的 Udesk#编号”匹配 Udesk 的“编号”补齐缺失字段（关联提出人、工单分类、工单标签、客服结论）
 - 导出文件名：月度绩效结算表.xlsx
 """
     )
@@ -40,6 +41,10 @@ else:
     st.info("未找到 QA 模板文件：templates/qa_template.xlsx")
 
 qa_file = st.file_uploader("上传 QA 结果 Excel", type=["xlsx"])
+udesk_file = st.file_uploader(
+    "上传 Udesk 工单 Excel（可选，用于补齐飞书工单缺失字段）",
+    type=["xlsx"],
+)
 export_template_path = (
     Path(__file__).resolve().parent / "templates" / "export_template.xlsx"
 )
@@ -76,7 +81,7 @@ default_grade = st.selectbox(
 
 if st.button("开始计算", type="primary"):
     try:
-        ticket_df, qa_df = parse_inputs(ticket_file, qa_file)
+        ticket_df, qa_df = parse_inputs(ticket_file, qa_file, udesk_file=udesk_file)
         estimated_unit = "minutes" if estimated_unit_label == "分钟" else "hours"
         processed_ticket_df = preprocess_and_calculate(
             ticket_df, estimated_unit=estimated_unit

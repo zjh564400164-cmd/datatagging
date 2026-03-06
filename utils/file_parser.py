@@ -60,6 +60,79 @@ def _read_excel(uploaded_file) -> pd.DataFrame:
         raise AppError(f"Excel 解析失败：{exc}") from exc
 
 
+def _extract_udesk_id_from_title(value: str) -> str:
+    text = str(value or "").strip()
+    match = re.search(r"Udesk#(\d+)", text, flags=re.IGNORECASE)
+    return match.group(1) if match else ""
+
+
+def _normalize_udesk_id(value: str) -> str:
+    text = str(value or "").strip()
+    match = re.search(r"(\d+)", text)
+    return match.group(1) if match else ""
+
+
+def _is_empty_text(value) -> bool:
+    return str(value or "").strip() in {"", "nan", "<空>"}
+
+
+def _normalize_udesk_conclusion(value: str) -> str:
+    text = str(value or "").strip()
+    mapping = {
+        "客服可处理": "客服可业务处理",
+    }
+    return mapping.get(text, text)
+
+
+def _fill_ticket_from_udesk(ticket_df: pd.DataFrame, udesk_df: pd.DataFrame) -> pd.DataFrame:
+    if ticket_df.empty or udesk_df.empty:
+        return ticket_df.copy()
+    if "问题名称" not in ticket_df.columns:
+        return ticket_df.copy()
+    if "编号" not in udesk_df.columns:
+        return ticket_df.copy()
+
+    out = ticket_df.copy()
+    out["_udesk_id"] = out["问题名称"].apply(_extract_udesk_id_from_title)
+
+    udesk_norm = udesk_df.copy()
+    udesk_norm["_udesk_id"] = udesk_norm["编号"].apply(_normalize_udesk_id)
+    udesk_norm = udesk_norm[udesk_norm["_udesk_id"] != ""].copy()
+    if udesk_norm.empty:
+        return out.drop(columns=["_udesk_id"])
+
+    # Keep first occurrence for each udesk id.
+    udesk_norm = udesk_norm.drop_duplicates(subset=["_udesk_id"], keep="first")
+    udesk_map = udesk_norm.set_index("_udesk_id")
+
+    for idx, row in out.iterrows():
+        uid = str(row.get("_udesk_id", "")).strip()
+        if not uid or uid not in udesk_map.index:
+            continue
+
+        src = udesk_map.loc[uid]
+
+        if "关联提出人" in out.columns and _is_empty_text(row.get("关联提出人")):
+            out.at[idx, "关联提出人"] = str(src.get("受理客服", "")).strip()
+
+        if "工单标签" in out.columns and _is_empty_text(row.get("工单标签")):
+            out.at[idx, "工单标签"] = str(src.get("工单标签", "")).strip()
+
+        if "工单分类" in out.columns and _is_empty_text(row.get("工单分类")):
+            tpl = str(src.get("模板", "")).strip()
+            out.at[idx, "工单分类"] = f"群聊工单 / {tpl}" if tpl else ""
+
+        if "客服结论" in out.columns and _is_empty_text(row.get("客服结论")):
+            out.at[idx, "客服结论"] = _normalize_udesk_conclusion(str(src.get("客服结论", "")))
+
+    # Remove rows with empty proposer after补齐（这类数据无法参与绩效计算）.
+    if "关联提出人" in out.columns:
+        proposer = out["关联提出人"].fillna("").astype(str).str.strip()
+        out = out[proposer != ""].copy()
+
+    return out.drop(columns=["_udesk_id"])
+
+
 def _match_week_range_col(col_name: str) -> bool:
     text = str(col_name).strip()
     pattern = r"^\d{4}[/-]\d{1,2}[/-]\d{1,2}\s*[-~至]\s*\d{4}[/-]\d{1,2}[/-]\d{1,2}$"
@@ -239,13 +312,17 @@ def _validate_qa_week_ranges(ticket_df: pd.DataFrame, week_meta: list[tuple[int,
         )
 
 
-def parse_inputs(ticket_file, qa_file) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def parse_inputs(ticket_file, qa_file, udesk_file=None) -> Tuple[pd.DataFrame, pd.DataFrame]:
     if ticket_file is None:
         raise AppError("请上传工单明细 Excel。")
     if qa_file is None:
         raise AppError("请上传 QA 结果 Excel。")
 
     ticket_df = _read_excel(ticket_file)
+    if udesk_file is not None:
+        udesk_df = _read_excel(udesk_file)
+        ticket_df = _fill_ticket_from_udesk(ticket_df, udesk_df)
+
     qa_raw_df = _remove_qa_example_rows(_read_excel(qa_file))
     qa_df, week_meta = _normalize_qa_df(qa_raw_df)
 
