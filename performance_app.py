@@ -95,6 +95,8 @@ if st.button("开始计算", type="primary"):
             weekly_sheets,
             template_bytes=template_bytes,
             week_date_labels=week_date_labels,
+            ticket_verify_df=ticket_df,
+            qa_verify_df=qa_df,
         )
 
         st.success("计算完成。")

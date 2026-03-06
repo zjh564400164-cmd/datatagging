@@ -53,11 +53,35 @@ def _sorted_week_names(weekly_sheets: Dict[str, pd.DataFrame]) -> list[str]:
     return sorted(weekly_sheets.keys(), key=lambda x: int(str(x).replace("W", "")))
 
 
+def _upsert_verification_sheet(wb, sheet_name: str, df: pd.DataFrame | None) -> None:
+    if sheet_name in wb.sheetnames:
+        del wb[sheet_name]
+    ws = wb.create_sheet(title=sheet_name)
+    if df is None:
+        ws["A1"] = "无数据"
+        return
+
+    safe_df = df.copy()
+    if safe_df.empty:
+        ws["A1"] = "无数据"
+        return
+
+    safe_df = safe_df.fillna("")
+    for col_idx, col_name in enumerate(safe_df.columns, start=1):
+        ws.cell(row=1, column=col_idx, value=str(col_name))
+
+    for row_idx, row in enumerate(safe_df.itertuples(index=False), start=2):
+        for col_idx, value in enumerate(row, start=1):
+            ws.cell(row=row_idx, column=col_idx, value=value)
+
+
 def _export_with_template(
     monthly_df: pd.DataFrame,
     weekly_sheets: Dict[str, pd.DataFrame],
     template_bytes: bytes,
     week_date_labels: dict[str, str] | None = None,
+    ticket_verify_df: pd.DataFrame | None = None,
+    qa_verify_df: pd.DataFrame | None = None,
 ) -> bytes:
     wb = load_workbook(BytesIO(template_bytes))
     week_names = _sorted_week_names(weekly_sheets)
@@ -239,6 +263,9 @@ def _export_with_template(
     if ws.max_column > total_reward_col:
         ws.delete_cols(total_reward_col + 1, ws.max_column - total_reward_col)
 
+    _upsert_verification_sheet(wb, "核验_工单导入", ticket_verify_df)
+    _upsert_verification_sheet(wb, "核验_QA导入", qa_verify_df)
+
     output = BytesIO()
     wb.save(output)
     output.seek(0)
@@ -250,10 +277,17 @@ def export_to_excel(
     weekly_sheets: Dict[str, pd.DataFrame],
     template_bytes: bytes | None = None,
     week_date_labels: dict[str, str] | None = None,
+    ticket_verify_df: pd.DataFrame | None = None,
+    qa_verify_df: pd.DataFrame | None = None,
 ) -> bytes:
     if template_bytes:
         return _export_with_template(
-            monthly_df, weekly_sheets, template_bytes, week_date_labels=week_date_labels
+            monthly_df,
+            weekly_sheets,
+            template_bytes,
+            week_date_labels=week_date_labels,
+            ticket_verify_df=ticket_verify_df,
+            qa_verify_df=qa_verify_df,
         )
 
     output = BytesIO()
@@ -262,6 +296,10 @@ def export_to_excel(
         monthly_df.to_excel(writer, index=False, sheet_name="绩效表（月汇总）")
         for week_name, week_df in weekly_sheets.items():
             week_df.to_excel(writer, index=False, sheet_name=week_name)
+        if ticket_verify_df is not None:
+            ticket_verify_df.to_excel(writer, index=False, sheet_name="核验_工单导入")
+        if qa_verify_df is not None:
+            qa_verify_df.to_excel(writer, index=False, sheet_name="核验_QA导入")
 
     output.seek(0)
     return output.getvalue()
