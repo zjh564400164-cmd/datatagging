@@ -27,6 +27,21 @@ QA_REQUIRED_COLUMNS = [
 ]
 
 
+def _remove_qa_example_rows(qa_df: pd.DataFrame) -> pd.DataFrame:
+    if qa_df.empty:
+        return qa_df
+
+    first_col = qa_df.columns[0]
+    first_col_text = qa_df[first_col].fillna("").astype(str).str.strip().str.lower()
+    is_example = first_col_text.isin(["示例", "example"])
+
+    if "客服" in qa_df.columns:
+        agent_text = qa_df["客服"].fillna("").astype(str).str.strip().str.lower()
+        is_example = is_example | agent_text.isin(["示例", "xxx"])
+
+    return qa_df.loc[~is_example].copy()
+
+
 def _read_excel(uploaded_file) -> pd.DataFrame:
     try:
         return pd.read_excel(uploaded_file, engine="openpyxl")
@@ -203,11 +218,11 @@ def parse_inputs(ticket_file, qa_file) -> Tuple[pd.DataFrame, pd.DataFrame]:
         raise AppError("请上传 QA 结果 Excel。")
 
     ticket_df = _read_excel(ticket_file)
-    qa_raw_df = _read_excel(qa_file)
+    qa_raw_df = _remove_qa_example_rows(_read_excel(qa_file))
     qa_df, week_meta = _normalize_qa_df(qa_raw_df)
 
-    ensure_columns(ticket_df, TICKET_REQUIRED_COLUMNS, "ticket detail")
-    ensure_columns(qa_df, QA_REQUIRED_COLUMNS, "QA result")
+    ensure_columns(ticket_df, TICKET_REQUIRED_COLUMNS, "工单明细")
+    ensure_columns(qa_df, QA_REQUIRED_COLUMNS, "QA结果")
     _validate_qa_week_ranges(ticket_df, week_meta)
 
     if ticket_df.empty:
