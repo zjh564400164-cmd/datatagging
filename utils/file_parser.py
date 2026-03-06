@@ -33,6 +33,11 @@ QA_VERSION_COLUMNS = [
 ]
 
 
+def _is_old_version_text(value: str) -> bool:
+    text = str(value).strip().lower()
+    return text in {"老版", "旧版", "old", "legacy"}
+
+
 def _remove_qa_example_rows(qa_df: pd.DataFrame) -> pd.DataFrame:
     if qa_df.empty:
         return qa_df
@@ -170,8 +175,13 @@ def _normalize_qa_wide_to_long(qa_df: pd.DataFrame) -> tuple[pd.DataFrame, list[
         for idx, (grade_col, ratio_col) in enumerate(grade_ratio_pairs, start=1):
             grade = row.get(grade_col)
             if pd.isna(grade) or str(grade).strip() == "":
-                continue
-            ratio = row.get(ratio_col) if ratio_col is not None else 0.0
+                if _is_old_version_text(qa_version):
+                    grade = "A"
+                    ratio = 0.0
+                else:
+                    continue
+            else:
+                ratio = row.get(ratio_col) if ratio_col is not None else 0.0
             row_item = {
                 "客服": agent_name,
                 "等级": str(grade).strip(),

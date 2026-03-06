@@ -8,6 +8,12 @@ import pandas as pd
 from .helpers import AppError, normalize_text, safe_to_float
 
 STANDARD_WEEKLY_MINUTES = 2400.0
+OLD_MONTHLY_STANDARD_MINUTES = 10560.0
+OLD_BONUS_START_ACHIEVED_MINUTES = 10800.0
+OLD_BONUS_STEP_MINUTES = 240.0
+OLD_BONUS_BASE = 100.0
+OLD_BONUS_STEP = 75.0
+OLD_BONUS_CAP = 1525.0
 
 
 @dataclass
@@ -72,13 +78,52 @@ def calc_week_reward(grade: str, m_over: float) -> float:
     raise AppError(f"无效的 QA 等级：{grade}")
 
 
-def _prepare_qa_map(qa_df: pd.DataFrame) -> Dict[Tuple[str, str], dict]:
+def _normalize_version(value: str) -> str:
+    text = normalize_text(value).lower()
+    if text in {"老版", "旧版", "old", "legacy"}:
+        return "old"
+    if text in {"新版", "new"}:
+        return "new"
+    if text == "":
+        return ""
+    raise AppError(f"无效的版本值：{value}。请填写“老版”或“新版”。")
+
+
+def _extract_row_version(row: pd.Series) -> str:
+    for col in ["版本", "版本（老版/新版）", "版本(老版/新版)"]:
+        if col in row.index:
+            v = _normalize_version(str(row.get(col, "")))
+            if v:
+                return v
+    return ""
+
+
+def calc_old_month_reward(achieved_minutes: float) -> float:
+    if achieved_minutes < OLD_BONUS_START_ACHIEVED_MINUTES:
+        return 0.0
+    steps = int((achieved_minutes - OLD_BONUS_START_ACHIEVED_MINUTES) // OLD_BONUS_STEP_MINUTES)
+    reward = OLD_BONUS_BASE + (steps * OLD_BONUS_STEP)
+    return min(reward, OLD_BONUS_CAP)
+
+
+def _prepare_qa_map(qa_df: pd.DataFrame) -> tuple[Dict[Tuple[str, str], dict], Dict[str, str]]:
     qa_map: Dict[Tuple[str, str], dict] = {}
+    version_by_agent: Dict[str, str] = {}
+
     for _, row in qa_df.iterrows():
         agent_name = normalize_text(row.get("客服"))
         week = normalize_text(row.get("所属周次"))
         grade = normalize_text(row.get("等级")).upper()
         ratio_percent = safe_to_float(row.get("质检会话占比"), 0.0)
+        version = _extract_row_version(row)
+
+        if agent_name and version:
+            prev = version_by_agent.get(agent_name)
+            if prev and prev != version:
+                raise AppError(
+                    f"客服「{agent_name}」同时出现老版/新版，请只保留一种版本。"
+                )
+            version_by_agent[agent_name] = version
 
         if not agent_name or not week:
             continue
@@ -87,7 +132,7 @@ def _prepare_qa_map(qa_df: pd.DataFrame) -> Dict[Tuple[str, str], dict]:
             "grade": grade,
             "ratio_percent": ratio_percent,
         }
-    return qa_map
+    return qa_map, version_by_agent
 
 
 def calculate_performance(
@@ -109,12 +154,24 @@ def calculate_performance(
         .rename(columns={"关联提出人": "agent_name"})
     )
 
-    qa_map = _prepare_qa_map(qa_df)
+    qa_map, version_by_agent = _prepare_qa_map(qa_df)
+    agent_list = sorted(grouped["agent_name"].astype(str).unique().tolist())
+    missing_version_agents = [a for a in agent_list if not version_by_agent.get(a)]
+    if missing_version_agents:
+        preview = ", ".join(missing_version_agents[:10])
+        if len(missing_version_agents) > 10:
+            preview += f" ...（另有 {len(missing_version_agents) - 10} 人）"
+        raise AppError(
+            "以下客服未填写版本（老版/新版）："
+            f"{preview}。请在 QA 文件中按客服填写版本。"
+        )
 
     missing_pairs = []
     for _, row in grouped.iterrows():
         agent_name = normalize_text(row["agent_name"])
         week = normalize_text(row["week"])
+        if version_by_agent.get(agent_name) == "old":
+            continue
         if (agent_name, week) not in qa_map:
             missing_pairs.append((agent_name, week))
 
@@ -129,9 +186,32 @@ def calculate_performance(
 
     qa_fallback_used: List[Tuple[str, str]] = []
     weekly_rows = []
+    old_monthly_rows: list[dict] = []
+    old_monthly_grouped = (
+        grouped[grouped["agent_name"].map(lambda x: version_by_agent.get(normalize_text(x)) == "old")]
+        .groupby("agent_name", as_index=False)
+        .agg(y_actual=("y_actual", "sum"))
+    )
+    for _, row in old_monthly_grouped.iterrows():
+        agent_name = normalize_text(row["agent_name"])
+        y_month = safe_to_float(row["y_actual"], 0.0)
+        reward = calc_old_month_reward(y_month)
+        rate = y_month / OLD_MONTHLY_STANDARD_MINUTES if OLD_MONTHLY_STANDARD_MINUTES > 0 else 0.0
+        old_monthly_rows.append(
+            {
+                "客服姓名": agent_name,
+                "累计修正工时": y_month,
+                "累计激励奖金": reward,
+                "月度达成率": rate,
+            }
+        )
+
     for _, row in grouped.iterrows():
         agent_name = normalize_text(row["agent_name"])
         week = normalize_text(row["week"])
+        if version_by_agent.get(agent_name) == "old":
+            continue
+
         qa_item = qa_map.get((agent_name, week))
         if qa_item is None:
             qa_item = {
@@ -186,20 +266,25 @@ def calculate_performance(
         columns={"agent_name": "客服姓名", "total_tickets": "总工单量"}
     )
 
-    month_perf = (
-        weekly_df.assign(corrected=lambda d: d["质检系数 X"] * d["周实际工时 Y"])
-        .groupby("客服姓名", as_index=False)
-        .agg(
-            累计修正工时=("corrected", "sum"),
-            累计激励奖金=("周奖励", "sum"),
-            n_sum=("周标准工时 N", "sum"),
+    if weekly_df.empty:
+        monthly_new_df = pd.DataFrame(columns=["客服姓名", "累计修正工时", "累计激励奖金", "月度达成率"])
+    else:
+        month_perf = (
+            weekly_df.assign(corrected=lambda d: d["质检系数 X"] * d["周实际工时 Y"])
+            .groupby("客服姓名", as_index=False)
+            .agg(
+                累计修正工时=("corrected", "sum"),
+                累计激励奖金=("周奖励", "sum"),
+                n_sum=("周标准工时 N", "sum"),
+            )
         )
-    )
-    month_perf["月度达成率"] = month_perf.apply(
-        lambda r: (r["累计修正工时"] / r["n_sum"]) if r["n_sum"] > 0 else 0.0, axis=1
-    )
+        month_perf["月度达成率"] = month_perf.apply(
+            lambda r: (r["累计修正工时"] / r["n_sum"]) if r["n_sum"] > 0 else 0.0, axis=1
+        )
+        monthly_new_df = month_perf.drop(columns=["n_sum"])
 
-    monthly_df = month_perf.drop(columns=["n_sum"])
+    monthly_old_df = pd.DataFrame(old_monthly_rows)
+    monthly_df = pd.concat([monthly_new_df, monthly_old_df], ignore_index=True)
     monthly_df = monthly_df.merge(total_tickets_df, on="客服姓名", how="left")
 
     monthly_df = monthly_df[
@@ -207,7 +292,7 @@ def calculate_performance(
     ].sort_values("客服姓名")
 
     weekly_sheets = {}
-    for week_name in sorted(weekly_df["week"].unique(), key=lambda w: int(w[1:])):
+    for week_name in sorted(weekly_df["week"].unique(), key=lambda w: int(str(w)[1:])):
         sheet_df = weekly_df[weekly_df["week"] == week_name].copy()
         sheet_df = sheet_df[
             [

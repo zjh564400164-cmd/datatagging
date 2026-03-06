@@ -108,9 +108,12 @@ if st.button("开始计算", type="primary"):
         st.dataframe(monthly_df, use_container_width=True)
 
         st.subheader("周明细预览")
-        week_names = sorted(weekly_sheets.keys(), key=lambda x: int(x[1:]))
-        selected_week = st.selectbox("选择周次", options=week_names)
-        st.dataframe(weekly_sheets[selected_week], use_container_width=True)
+        if weekly_sheets:
+            week_names = sorted(weekly_sheets.keys(), key=lambda x: int(x[1:]))
+            selected_week = st.selectbox("选择周次", options=week_names)
+            st.dataframe(weekly_sheets[selected_week], use_container_width=True)
+        else:
+            st.info("当前结果无周维度明细（例如全部为老版月度计算）。")
 
         st.download_button(
             label="下载 月度绩效结算表.xlsx",
